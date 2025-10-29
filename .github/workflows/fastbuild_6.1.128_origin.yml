@@ -1,4 +1,4 @@
-name: 加速版构建 6.1.128 (天玑特供)欧加真OKI内核_fixtime
+name: 加速版构建 6.1.128 (天玑特供)欧加真OKI内核
 
 env:
   TZ: Asia/Shanghai
@@ -557,81 +557,59 @@ jobs:
           echo "ignore_headers_in_manifest = kernel_workspace/common/out/include/generated/autoconf.h common/out/include/generated/autoconf.h include/generated/autoconf.h" >> "$CCACHE_DIR/ccache.conf"
           
           cd kernel_workspace/common
+          wget https://github.com/cctv18/oppo_oplus_realme_sm8650/raw/refs/heads/main/lib/libfakestat.so
+          wget https://github.com/cctv18/oppo_oplus_realme_sm8650/raw/refs/heads/main/lib/libfaketimeMT.so
+          chmod 777 ./*.so
+          export FAKESTAT="2025-10-09 08:52:55"
+          export FAKETIME="@2025-10-09 08:52:55"
+          echo "FAKESTAT=$FAKESTAT" >> $GITHUB_ENV
+          echo "FAKETIME=$FAKETIME" >> $GITHUB_ENV
+          SO_DIR=$(pwd)
+          export PRELOAD_LIBS="$SO_DIR/libfakestat.so $SO_DIR/libfaketimeMT.so"
+          #创建 CC (编译器) 包装器
+          echo '#!/bin/bash' > cc-wrapper
+          echo 'export LD_PRELOAD="'$PRELOAD_LIBS'"' >> cc-wrapper
+          echo 'export FAKESTAT="'$FAKESTAT'"' >> cc-wrapper
+          echo 'export FAKETIME="'$FAKETIME'"' >> cc-wrapper
+          echo 'ccache clang "$@"' >> cc-wrapper
+          #创建 LD (链接器) 包装器
+          echo '#!/bin/bash' > ld-wrapper
+          echo 'export LD_PRELOAD="'$PRELOAD_LIBS'"' >> ld-wrapper
+          echo 'export FAKESTAT="'$FAKESTAT'"' >> ld-wrapper
+          echo 'export FAKETIME="'$FAKETIME'"' >> ld-wrapper
+          echo 'ld.lld "$@"' >> ld-wrapper
           
-          # 设置目标编译时间戳
-          BUILD_TIMESTAMP="2025-10-09 08:52:55"
-          export SOURCE_DATE_EPOCH=$(date -d "$BUILD_TIMESTAMP" +%s)
-          export KBUILD_BUILD_TIMESTAMP="$BUILD_TIMESTAMP"
-          
-          # 安装 faketime 工具
-          sudo apt-get update && sudo apt-get install -y faketime
-          
-          # 直接修改内核时间戳相关源码文件
-          echo "正在修改内核源码中的时间戳..."
-          
-          # 1. 修改 scripts/mkcompile_h 脚本
-          if [ -f scripts/mkcompile_h ]; then
-            cp scripts/mkcompile_h scripts/mkcompile_h.bak
-            # 替换所有日期命令为固定时间
-            sed -i 's/`date`/echo "Thu Oct  9 08:52:55 UTC 2025"/' scripts/mkcompile_h
-            sed -i 's/`LC_ALL=C date`/echo "Thu Oct  9 08:52:55 UTC 2025"/' scripts/mkcompile_h
-            sed -i 's/$(date)/echo "Thu Oct  9 08:52:55 UTC 2025"/' scripts/mkcompile_h
-            sed -i 's/\$DATE/echo "Thu Oct  9 08:52:55 UTC 2025"/' scripts/mkcompile_h
-          fi
-          
-          # 2. 创建固定的编译时间头文件
-          mkdir -p include/generated
-          cat > include/generated/compile.h << 'EOF'
-          /* This file is auto generated, version 1 */
-          /* SMP PREEMPT */
-          #define UTS_MACHINE "aarch64"
-          #define UTS_VERSION "#1 SMP PREEMPT Thu Oct  9 08:52:55 UTC 2025"
-          #define LINUX_COMPILE_BY "builder"
-          #define LINUX_COMPILE_HOST "github-actions"  
-          #define LINUX_COMPILE_DOMAIN "(none)"
-          #define LINUX_COMPILE_TIME "08:52:55"
-          #define LINUX_COMPILE_DATE "Oct  9 2025"
-          #define LINUX_COMPILER "clang version 20.0.0git"
-          EOF
-          
-          echo "SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH" >> $GITHUB_ENV
-          echo "KBUILD_BUILD_TIMESTAMP=$BUILD_TIMESTAMP" >> $GITHUB_ENV
-          # 验证时间戳设置
-          echo "--- 确定性构建时间戳设置完成 ---"
-          echo "SOURCE_DATE_EPOCH: $SOURCE_DATE_EPOCH"
-          echo "KBUILD_BUILD_TIMESTAMP: $KBUILD_BUILD_TIMESTAMP" 
-          echo "目标时间戳: Thu Oct  9 08:52:55 UTC 2025"
-          echo "当前系统时间: $(date)"
-          echo "faketime测试: $(faketime '2025-10-09 08:52:55' date)"
+          # 测试时间劫持测试是否正常工作
+          echo "--- [Wrapper Test] 正在创建通用的时间劫持测试脚本 ---"
+          echo '#!/bin/bash' > test-wrapper.sh
+          echo 'export LD_PRELOAD="'$PRELOAD_LIBS'"' >> test-wrapper.sh
+          echo 'export FAKESTAT="'$FAKESTAT'"' >> test-wrapper.sh
+          echo 'export FAKETIME="'$FAKETIME'"' >> test-wrapper.sh
+          echo 'echo ">>> Wrapper 内部环境检查完毕."' >> test-wrapper.sh
+          echo 'exec "$@"' >> test-wrapper.sh # 执行所有传入的参数
+          chmod +x test-wrapper.sh
+          echo "--- [Wrapper Test] 正在测试 (date) 命令 ---"
+          ./test-wrapper.sh date
+          echo "--- [Wrapper Test] 正在测试 (stat) 命令 ---"
+          ./test-wrapper.sh stat ./Makefile
+          echo "--- [Wrapper Test] 测试完毕 ---"
+          chmod +x cc-wrapper ld-wrapper
+          echo "--- 编译前环境时间: $(LD_PRELOAD=$PRELOAD_LIBS date) ---"
+          echo "--- 编译前环境文件时间戳: ---"
+          LD_PRELOAD=$PRELOAD_LIBS stat ./Makefile
           
           #在构建内核的同时清除不必要的.NET, Android NDK, Haskell, CodeQL运行库，清理空间且不阻塞后续步骤运行
           sudo rm -rf /usr/share/dotnet &
           sudo rm -rf /usr/local/lib/android &
           sudo rm -rf /opt/ghc &
           sudo rm -rf /opt/hostedtoolcache/CodeQL &
-          # 使用确定性构建时间戳进行编译
-          echo "--- 开始确定性构建 ---"
+          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="ccache clang" LD="ld.lld" HOSTLD=ld.lld O=out KCFLAGS+=-O2 KCFLAGS+=-Wno-error gki_defconfig &&
+          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="$(pwd)/cc-wrapper" LD="$(pwd)/ld-wrapper" HOSTLD=ld.lld O=out KCFLAGS+=-O2 KCFLAGS+=-Wno-error Image
           
-          # 第一步：生成配置（不需要时间戳）
-          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
-            CC="ccache clang" LD="ld.lld" HOSTLD=ld.lld O=out \
-            KCFLAGS+=-O2 KCFLAGS+=-Wno-error gki_defconfig
-          
-          # 第二步：使用 faketime 进行实际编译以确保时间戳一致性
-          echo "正在使用 faketime 进行编译..."
-          faketime '2025-10-09 08:52:55' \
-          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
-            CC="ccache clang" LD="ld.lld" HOSTLD=ld.lld O=out \
-            KCFLAGS+=-O2 KCFLAGS+=-Wno-error \
-            KBUILD_BUILD_TIMESTAMP="Thu Oct  9 08:52:55 UTC 2025" \
-            Image
-          
-          # 验证编译结果中的时间戳
-          echo "--- 编译完成，验证时间戳 ---"
-          if [ -f out/include/generated/compile.h ]; then
-            echo "编译时间戳验证:"
-            grep -E "UTS_VERSION|LINUX_COMPILE_(TIME|DATE)" out/include/generated/compile.h || echo "compile.h中未找到时间戳定义"
-          fi
+          # 编译后时间劫持二次校验
+          echo "--- 编译后环境时间: $(LD_PRELOAD=$PRELOAD_LIBS date) ---"
+          echo "--- 编译后环境文件时间戳: ---"
+          LD_PRELOAD=$PRELOAD_LIBS stat ./Makefile
           echo "内核编译完成！"
           echo "ccache状态："
           ccache -s
